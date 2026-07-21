@@ -585,6 +585,113 @@ def upsert_manual_product_cost():
     return jsonify({"ok": True, "sku": sku})
 
 
+@app.route("/api/orders")
+def api_orders():
+    """DB'ye zaten senkronize edilmiş siparişleri tarihe göre filtreleyip, her
+    siparişin satır (ürün) detaylarıyla birlikte döndürür. Trendyol API'sine
+    canlı istek ATMAZ — /api/sync-finance veya ilk açılışta sync_orders_to_db
+    ile DB'ye yazılmış veriyi okur, bu yüzden hızlıdır.
+    Parametreler: days=N | start_date=YYYY-MM-DD&end_date=YYYY-MM-DD | full_history=true
+                  status=<Trendyol durumu>, q=<sipariş no/müşteri araması>,
+                  page=1, page_size=50 (max 200)
+    """
+    args = request.args
+    end_dt = datetime.now()
+    if args.get("full_history", "").lower() == "true":
+        start_dt = DATA_START_DATE
+    elif args.get("start_date"):
+        try:
+            start_dt = datetime.strptime(args["start_date"], "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "start_date formatı YYYY-MM-DD olmalı."}), 400
+        if args.get("end_date"):
+            try:
+                end_dt = datetime.strptime(args["end_date"], "%Y-%m-%d") + timedelta(days=1)
+            except ValueError:
+                return jsonify({"error": "end_date formatı YYYY-MM-DD olmalı."}), 400
+    else:
+        days = args.get("days", default=30, type=int)
+        days = max(1, min(days or 30, 3650))
+        start_dt = end_dt - timedelta(days=days)
+
+    start_ms = int(start_dt.timestamp() * 1000)
+    end_ms = int(end_dt.timestamp() * 1000)
+
+    status = (args.get("status") or "").strip()
+    q = (args.get("q") or "").strip()
+    page = max(1, args.get("page", default=1, type=int) or 1)
+    page_size = max(1, min(args.get("page_size", default=50, type=int) or 50, 200))
+    offset = (page - 1) * page_size
+
+    where = ["order_date BETWEEN ? AND ?"]
+    params = [start_ms, end_ms]
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    if q:
+        where.append("(order_number LIKE ? OR customer LIKE ?)")
+        params.extend([f"%{q}%", f"%{q}%"])
+    where_sql = " AND ".join(where)
+
+    with get_connection() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) AS c FROM orders WHERE {where_sql}", params
+        ).fetchone()["c"]
+
+        order_rows = conn.execute(
+            f"""SELECT * FROM orders WHERE {where_sql}
+                ORDER BY order_date DESC LIMIT ? OFFSET ?""",
+            [*params, page_size, offset],
+        ).fetchall()
+
+        spids = [r["shipment_package_id"] for r in order_rows]
+        lines_by_spid = defaultdict(list)
+        if spids:
+            placeholders = ",".join("?" * len(spids))
+            line_rows = conn.execute(
+                f"""SELECT * FROM order_lines WHERE shipment_package_id IN ({placeholders})""",
+                spids,
+            ).fetchall()
+            for ln in line_rows:
+                lines_by_spid[ln["shipment_package_id"]].append({
+                    "barcode": ln["barcode"],
+                    "merchantSku": ln["merchant_sku"],
+                    "productName": ln["product_name"],
+                    "quantity": ln["quantity"],
+                    "lineUnitPrice": ln["line_unit_price"],
+                    "commissionRate": ln["commission_rate"],
+                })
+
+    orders = []
+    for r in order_rows:
+        orders.append({
+            "shipmentPackageId": r["shipment_package_id"],
+            "orderNumber": r["order_number"],
+            "orderDate": r["order_date"],
+            "status": r["status"],
+            "customer": r["customer"],
+            "cargoProvider": r["cargo_provider"],
+            "grossAmount": r["gross_amount"],
+            "discountAmount": r["discount_amount"],
+            "netAmount": r["net_amount"],
+            "lines": lines_by_spid.get(r["shipment_package_id"], []),
+        })
+
+    return jsonify({
+        "orders": orders,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "start_date": start_dt.strftime("%Y-%m-%d"),
+        "end_date": (end_dt - timedelta(days=1)).strftime("%Y-%m-%d"),
+    })
+
+
+@app.route("/orders")
+def orders_page():
+    return render_template("orders.html")
+
+
 if __name__ == "__main__":
     print(f"Trendyol Satış Paneli başlatılıyor... Ortam: {ENV}")
     print(f"'Tüm Zamanlar' senkronizasyonu şu tarihten başlayacak: {DATA_START_DATE:%d.%m.%Y} "

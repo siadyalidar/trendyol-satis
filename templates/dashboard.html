@@ -125,6 +125,7 @@
       <option value="30" selected>Son 30 gün</option>
       <option value="60">Son 60 gün</option>
       <option value="90">Son 90 gün</option>
+      <option value="all">Tüm Zamanlar</option>
     </select>
     <button class="primary" id="sync-btn">Verileri Senkronize Et</button>
   </div>
@@ -262,11 +263,18 @@ async function checkConfig() {
   return true;
 }
 
+function rangeQueryParam() {
+  // "all" seçiliyken days= yerine full_history=true gönderiyoruz — backend
+  // bunu DATA_START_DATE'ten bugüne kadar tüm veri olarak yorumluyor.
+  const val = document.getElementById('range-select').value;
+  return val === 'all' ? 'full_history=true' : `days=${val}`;
+}
+
 async function loadDashboard() {
   const configured = await checkConfig();
   if (!configured) return;
 
-  const days = document.getElementById('range-select').value;
+  const rangeParam = rangeQueryParam();
   document.getElementById('loading').style.display = 'block';
   document.getElementById('content').style.display = 'none';
   hideError();
@@ -275,8 +283,8 @@ async function loadDashboard() {
 
   try {
     const [summaryRes, bestRes] = await Promise.all([
-      fetch(`/api/dashboard-summary?days=${days}`),
-      fetch(`/api/best-sellers?days=${days}&limit=15`)
+      fetch(`/api/dashboard-summary?${rangeParam}`),
+      fetch(`/api/best-sellers?${rangeParam}&limit=15`)
     ]);
     const summary = await summaryRes.json();
     const best = await bestRes.json();
@@ -360,23 +368,49 @@ function renderLines(lines) {
 async function runSync() {
   const btn = document.getElementById('sync-btn');
   const statusEl = document.getElementById('sync-status');
-  const days = document.getElementById('range-select').value;
+  const rangeParam = rangeQueryParam();
+  const rangeLabel = document.getElementById('range-select').selectedOptions[0].textContent;
 
   btn.disabled = true;
   btn.textContent = 'Senkronize ediliyor…';
   statusEl.style.display = 'block';
-  statusEl.textContent = `Son ${days} gün için siparişler ve Finans API verisi çekiliyor — bu birkaç dakika sürebilir (çok sayıda işlem türü ve 15 günlük parçalar ayrı ayrı çekiliyor)…`;
+  statusEl.textContent = `${rangeLabel} için siparişler ve Finans API verisi çekiliyor — bu birkaç dakika sürebilir (çok sayıda işlem türü ve 15 günlük parçalar ayrı ayrı çekiliyor)…`;
   hideError();
 
   try {
-    const res = await fetch(`/api/sync-finance?days=${days}`, { method: 'POST' });
+    const res = await fetch(`/api/sync-finance?${rangeParam}`, { method: 'POST' });
     const data = await res.json();
     if (data.error) {
       showError(data.error);
       statusEl.style.display = 'none';
-    } else {
-      statusEl.textContent = `Tamamlandı: ${data.orders_synced} sipariş, ${data.order_lines_synced} satır, ${data.settlements_synced} settlement, ${data.other_financials_synced} diğer finansal kayıt senkronize edildi.`;
-      await loadDashboard();
+      btn.disabled = false;
+      btn.textContent = 'Verileri Senkronize Et';
+      return;
+    }
+
+    // /api/sync-finance sadece senkronizasyonu arka planda BAŞLATIYOR ve hemen
+    // {started, start_date, end_date} döndürüyor — orders_synced gibi alanlar
+    // burada YOK, bu yüzden eskiden "undefined" basıyordu. Asıl ilerleme ve
+    // tamamlanma mesajı /api/sync-status'te oluşuyor; onu yoklamamız (polling)
+    // gerekiyor.
+    while (true) {
+      const statusRes = await fetch('/api/sync-status');
+      const progress = await statusRes.json();
+
+      if (progress.status === 'running') {
+        statusEl.textContent = progress.message || 'Senkronize ediliyor…';
+      } else if (progress.status === 'done') {
+        statusEl.textContent = progress.message || 'Tamamlandı.';
+        await loadDashboard();
+        break;
+      } else if (progress.status === 'error') {
+        showError(progress.error || 'Senkronizasyon hatası.');
+        statusEl.style.display = 'none';
+        break;
+      } else {
+        break;
+      }
+      await new Promise(r => setTimeout(r, 1000));
     }
   } catch (e) {
     showError('Senkronizasyon hatası: ' + e.message);
