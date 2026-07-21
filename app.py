@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request
 from werkzeug.utils import secure_filename
 
 from cost_import import import_product_costs
@@ -362,12 +362,15 @@ def _resolve_sync_range(args):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("app.html")
 
 
 @app.route("/dashboard")
 def dashboard():
-    return render_template("dashboard.html")
+    # Eski bookmark/link uyumluluğu: artık ayrı bir sayfa değil, tek sayfadaki
+    # "Kâr/Zarar" sekmesi. app.html içindeki JS ?tab= parametresini okuyup
+    # doğru sekmeyi açıyor.
+    return redirect("/?tab=profit")
 
 
 @app.route("/api/config-status")
@@ -689,7 +692,8 @@ def api_orders():
 
 @app.route("/orders")
 def orders_page():
-    return render_template("orders.html")
+    # Eski bookmark/link uyumluluğu: artık "Siparişler" tek sayfadaki bir sekme.
+    return redirect("/?tab=orders")
 
 
 if __name__ == "__main__":

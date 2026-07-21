@@ -1,0 +1,21 @@
+diff --git a/profit_engine.py b/profit_engine.py
+index d9e31a3..da52c9b 100644
+--- a/profit_engine.py
++++ b/profit_engine.py
+@@ -284,9 +284,14 @@ def compute_profit_summary(days=None, start_dt=None, end_dt=None):
+     # Kargo tutarı satır bazında (cargo_costs) zaten düşüldüğü için burada çıkarıyoruz:
+     platform_fee_total = platform_fee_total_raw - kargo_within_deductions
+     cash_advance_total = other_totals.get("CashAdvance", {}).get("debt", 0)
++    # NOT (sign düzeltmesi): Trendyol API'sinde "PaymentOrder" (gerçek "Marketplace
++    # Ödeme" / hakediş havalesi) kayıtları HER ZAMAN "debt" alanında geliyor, "credit"
++    # hep 0 çıkıyor (bkz. trendyol_data.db örnek kayıtlar: 15/15 kayıt debt'te).
++    # Eskiden "credit - debt" hesaplandığı için sana gerçekten ödenen tutar negatif
++    # görünüyordu. Doğrusu:
+     payment_order_net = (
+-        other_totals.get("PaymentOrder", {}).get("credit", 0)
+-        - other_totals.get("PaymentOrder", {}).get("debt", 0)
++        other_totals.get("PaymentOrder", {}).get("debt", 0)
++        - other_totals.get("PaymentOrder", {}).get("credit", 0)
+     )
+ 
+     # platform_fee_total artık kargo faturası tutarı HARİÇ (yukarıda çıkarıldı),
