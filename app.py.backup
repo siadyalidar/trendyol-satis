@@ -1,0 +1,316 @@
+"""
+Trendyol Günlük Satış Paneli
+-----------------------------
+Trendyol Partner (Satıcı) API'sinden sipariş ve iade verilerini çekip
+günlük satış özetini gösteren local Flask uygulaması.
+
+Resmi API dokümantasyonu:
+https://developers.trendyol.com/docs/sipariş-paketlerini-çekme-getshipmentpackages
+https://developers.trendyol.com/docs/2-authorization
+
+Çalıştırmadan önce .env dosyasını doldurmanız gerekir (bkz. .env.example).
+"""
+
+import os
+import time
+from collections import defaultdict
+from datetime import datetime, timedelta
+
+import requests
+from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request
+
+load_dotenv()
+
+SUPPLIER_ID = os.getenv("TRENDYOL_SUPPLIER_ID", "").strip()
+API_KEY = os.getenv("TRENDYOL_API_KEY", "").strip()
+API_SECRET = os.getenv("TRENDYOL_API_SECRET", "").strip()
+ENV = os.getenv("TRENDYOL_ENV", "PROD").strip().upper()  # PROD veya STAGE
+INTEGRATOR_NAME = os.getenv("TRENDYOL_INTEGRATOR_NAME", "SelfIntegration").strip()
+
+BASE_URL = (
+    "https://apigw.trendyol.com"
+    if ENV == "PROD"
+    else "https://stageapigw.trendyol.com"
+)
+
+# Trendyol dokümantasyonuna göre User-Agent zorunlu:
+# "{SatıcıId} - {EntegratörFirmaAdı}" ya da kendi yazılımınızsa "{SatıcıId} - SelfIntegration"
+USER_AGENT = f"{SUPPLIER_ID} - {INTEGRATOR_NAME}"
+
+app = Flask(__name__)
+
+
+def _check_credentials():
+    if not (SUPPLIER_ID and API_KEY and API_SECRET):
+        return (
+            "API bilgileri eksik. Lütfen proje klasöründeki .env dosyasını "
+            "TRENDYOL_SUPPLIER_ID, TRENDYOL_API_KEY ve TRENDYOL_API_SECRET "
+            "değerleriyle doldurun."
+        )
+    return None
+
+
+def trendyol_get(path, params=None, max_retries=3):
+    """Trendyol API'ye GET isteği atar. 429 (rate limit) durumunda bekleyip tekrar dener."""
+    url = f"{BASE_URL}{path}"
+    headers = {"User-Agent": USER_AGENT}
+
+    for attempt in range(max_retries):
+        resp = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            auth=(API_KEY, API_SECRET),  # Basic Authentication
+            timeout=30,
+        )
+        if resp.status_code == 429:
+            time.sleep(2 * (attempt + 1))
+            continue
+        resp.raise_for_status()
+        return resp.json()
+
+    resp.raise_for_status()
+    return resp.json()
+
+
+def fetch_all_orders(start_ts_ms, end_ts_ms, status=None):
+    """Belirtilen tarih aralığındaki tüm sipariş paketlerini sayfalayarak çeker.
+    Not: Trendyol bu endpoint için maksimum 2 haftalık aralığa izin verir,
+    bu yüzden çağıran taraf (get_daily_sales) aralığı 2 haftalık parçalara böler.
+    """
+    all_orders = []
+    page = 0
+    size = 200  # Trendyol'un izin verdiği maksimum sayfa boyutu
+
+    while True:
+        params = {
+            "startDate": start_ts_ms,
+            "endDate": end_ts_ms,
+            "page": page,
+            "size": size,
+            "orderByField": "PackageLastModifiedDate",
+            "orderByDirection": "DESC",
+        }
+        if status:
+            params["status"] = status
+
+        data = trendyol_get(f"/integration/order/sellers/{SUPPLIER_ID}/orders", params)
+        content = data.get("content", [])
+        all_orders.extend(content)
+
+        total_pages = data.get("totalPages", 1)
+        page += 1
+        if page >= total_pages:
+            break
+
+    return all_orders
+
+
+def _date_chunks(start_dt, end_dt, max_days=14):
+    """Trendyol'un 2 haftalık aralık kısıtına uymak için tarih aralığını parçalara böler."""
+    chunks = []
+    cur = start_dt
+    while cur < end_dt:
+        chunk_end = min(cur + timedelta(days=max_days), end_dt)
+        chunks.append((cur, chunk_end))
+        cur = chunk_end
+    return chunks
+
+
+def get_daily_sales(days=30, statuses=None):
+    """Son N güne ait siparişleri çekip günlük bazda satış özetine dönüştürür."""
+    end_dt = datetime.now()
+    start_dt = end_dt - timedelta(days=days)
+
+    all_orders = []
+    for chunk_start, chunk_end in _date_chunks(start_dt, end_dt):
+        start_ms = int(chunk_start.timestamp() * 1000)
+        end_ms = int(chunk_end.timestamp() * 1000)
+        orders = fetch_all_orders(start_ms, end_ms, status=statuses)
+        all_orders.extend(orders)
+
+    # id'ye göre tekilleştir (parça sınırlarında çakışma olabilir)
+    unique = {o["shipmentPackageId"]: o for o in all_orders if "shipmentPackageId" in o}
+    orders = list(unique.values())
+
+    daily = defaultdict(lambda: {
+        "order_count": 0,
+        "package_count": 0,
+        "gross_amount": 0.0,
+        "discount_amount": 0.0,
+        "net_amount": 0.0,
+        "item_count": 0,
+        "commission_amount": 0.0,
+        "cancelled_count": 0,
+    })
+
+    order_numbers_seen = defaultdict(set)
+
+    for o in orders:
+        order_date_ms = o.get("orderDate")
+        if not order_date_ms:
+            continue
+        day_key = datetime.fromtimestamp(order_date_ms / 1000).strftime("%Y-%m-%d")
+
+        bucket = daily[day_key]
+        bucket["package_count"] += 1
+        bucket["gross_amount"] += o.get("packageGrossAmount", 0) or 0
+        bucket["discount_amount"] += o.get("packageTotalDiscount", 0) or 0
+        bucket["net_amount"] += o.get("packageTotalPrice", 0) or 0
+
+        order_numbers_seen[day_key].add(o.get("orderNumber"))
+
+        status = o.get("status")
+        if status in ("Cancelled", "UnSupplied"):
+            bucket["cancelled_count"] += 1
+
+        for line in o.get("lines", []):
+            bucket["item_count"] += line.get("quantity", 0) or 0
+            line_price = line.get("lineUnitPrice", 0) or 0
+            qty = line.get("quantity", 0) or 0
+            commission_rate = line.get("commission", 0) or 0
+            bucket["commission_amount"] += line_price * qty * (commission_rate / 100)
+
+    for day_key, bucket in daily.items():
+        bucket["order_count"] = len(order_numbers_seen[day_key])
+
+    result = [
+        {"date": day, **stats}
+        for day, stats in sorted(daily.items())
+    ]
+    return result, orders
+
+
+def get_daily_returns(days=30):
+    """getClaims servisinden iade verilerini çekip günlük bazda özetler."""
+    end_dt = datetime.now()
+    start_dt = end_dt - timedelta(days=days)
+
+    all_claims = []
+    for chunk_start, chunk_end in _date_chunks(start_dt, end_dt):
+        start_ms = int(chunk_start.timestamp() * 1000)
+        end_ms = int(chunk_end.timestamp() * 1000)
+        page = 0
+        size = 200
+        while True:
+            params = {
+                "startDate": start_ms,
+                "endDate": end_ms,
+                "page": page,
+                "size": size,
+            }
+            data = trendyol_get(f"/integration/order/sellers/{SUPPLIER_ID}/claims", params)
+            content = data.get("content", [])
+            all_claims.extend(content)
+            total_pages = data.get("totalPages", 1)
+            page += 1
+            if page >= total_pages:
+                break
+
+    daily = defaultdict(lambda: {"claim_count": 0, "item_count": 0})
+    for c in all_claims:
+        claim_date_ms = c.get("claimDate") or c.get("orderDate")
+        if not claim_date_ms:
+            continue
+        day_key = datetime.fromtimestamp(claim_date_ms / 1000).strftime("%Y-%m-%d")
+        bucket = daily[day_key]
+        bucket["claim_count"] += 1
+        items = c.get("claimItems") or c.get("items") or []
+        bucket["item_count"] += len(items)
+
+    return [{"date": d, **s} for d, s in sorted(daily.items())]
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/config-status")
+def config_status():
+    error = _check_credentials()
+    return jsonify({
+        "configured": error is None,
+        "message": error,
+        "env": ENV,
+        "supplier_id": SUPPLIER_ID if SUPPLIER_ID else None,
+    })
+
+
+@app.route("/api/daily-sales")
+def daily_sales():
+    error = _check_credentials()
+    if error:
+        return jsonify({"error": error}), 400
+
+    days = request.args.get("days", default=30, type=int)
+    days = max(1, min(days, 90))  # aşırı büyük istekleri sınırla
+
+    try:
+        daily, raw_orders = get_daily_sales(days=days)
+    except requests.HTTPError as e:
+        return jsonify({"error": f"Trendyol API hatası: {e}"}), 502
+    except requests.RequestException as e:
+        return jsonify({"error": f"Bağlantı hatası: {e}"}), 502
+
+    totals = {
+        "order_count": sum(d["order_count"] for d in daily),
+        "gross_amount": round(sum(d["gross_amount"] for d in daily), 2),
+        "discount_amount": round(sum(d["discount_amount"] for d in daily), 2),
+        "net_amount": round(sum(d["net_amount"] for d in daily), 2),
+        "commission_amount": round(sum(d["commission_amount"] for d in daily), 2),
+        "item_count": sum(d["item_count"] for d in daily),
+        "cancelled_count": sum(d["cancelled_count"] for d in daily),
+    }
+
+    for d in daily:
+        d["gross_amount"] = round(d["gross_amount"], 2)
+        d["discount_amount"] = round(d["discount_amount"], 2)
+        d["net_amount"] = round(d["net_amount"], 2)
+        d["commission_amount"] = round(d["commission_amount"], 2)
+
+    orders_summary = [
+        {
+            "orderNumber": o.get("orderNumber"),
+            "shipmentPackageId": o.get("shipmentPackageId"),
+            "orderDate": o.get("orderDate"),
+            "status": o.get("status"),
+            "customer": f"{o.get('customerFirstName', '')} {o.get('customerLastName', '')}".strip(),
+            "netAmount": o.get("packageTotalPrice"),
+            "cargoProvider": o.get("cargoProviderName"),
+        }
+        for o in sorted(raw_orders, key=lambda x: x.get("orderDate", 0), reverse=True)
+    ]
+
+    return jsonify({
+        "daily": daily,
+        "totals": totals,
+        "orders": orders_summary[:500],  # tabloyu makul boyutta tut
+    })
+
+
+@app.route("/api/daily-returns")
+def daily_returns():
+    error = _check_credentials()
+    if error:
+        return jsonify({"error": error}), 400
+
+    days = request.args.get("days", default=30, type=int)
+    days = max(1, min(days, 90))
+
+    try:
+        daily = get_daily_returns(days=days)
+    except requests.HTTPError as e:
+        return jsonify({"error": f"Trendyol API hatası (iadeler): {e}"}), 502
+    except requests.RequestException as e:
+        return jsonify({"error": f"Bağlantı hatası: {e}"}), 502
+
+    return jsonify({"daily": daily})
+
+
+if __name__ == "__main__":
+    print(f"Trendyol Satış Paneli başlatılıyor... Ortam: {ENV}")
+    if _check_credentials():
+        print("UYARI: .env dosyası henüz yapılandırılmadı. Panel açılacak ama veri çekemeyecek.")
+    app.run(debug=True, port=5050)
