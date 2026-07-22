@@ -251,6 +251,7 @@ def compute_profit_summary(days=None, start_dt=None, end_dt=None):
 
         line_results.append({
             "orderNumber": ln["order_number"],
+            "orderDate": ln["order_date"],
             "sku": ln["merchant_sku"],
             "productName": ln["product_name"],
             "quantity": ln["quantity"],
