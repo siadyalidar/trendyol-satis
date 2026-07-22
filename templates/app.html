@@ -172,6 +172,8 @@
     <button class="tab-btn active" data-tab="sales">📊 Satış Özeti</button>
     <button class="tab-btn" data-tab="profit">💰 Kâr/Zarar</button>
     <button class="tab-btn" data-tab="orders">📦 Siparişler</button>
+    <button class="tab-btn" data-tab="margins">📈 Kâr Marjı & Uyarılar</button>
+    <button class="tab-btn" data-tab="settings">⚙️ Ürün Ayarları</button>
   </div>
 </header>
 
@@ -220,6 +222,12 @@
         <div class="card"><div class="label">Dönem İçi Hakediş Ödemesi</div><div class="value" id="stat-payment-order">–</div></div>
       </div>
       <div class="panel">
+        <h2>Aylık Kâr Trendi</h2>
+        <p class="panel-note">Verinin başlangıcından bugüne, ay ay ciro, brüt kâr ve net kâr. Bu grafik yukarıdaki tarih filtresinden bağımsızdır — her zaman tüm geçmişi gösterir.</p>
+        <div id="monthly-loading" class="loading" style="padding:20px;">Yükleniyor…</div>
+        <div style="height:340px; display:none;" id="monthlyProfitChartWrap"><canvas id="monthlyProfitChart"></canvas></div>
+      </div>
+      <div class="panel">
         <h2>En Kârlı Ürünler</h2>
         <p class="panel-note">SKU bazında toplam ciro, kâr ve marj. Sıralama net kâra göre.</p>
         <div class="table-scroll">
@@ -233,12 +241,15 @@
         <h2>Sipariş Satırı Detayı</h2>
         <p class="panel-note">
           <span class="pill pill-real">Gerçek</span> = Finans API'den gelen kesin hakediş ·
-          <span class="pill pill-estimated">Tahmini</span> = henüz settlement oluşmamış ·
+          <span class="pill pill-estimated">Tahmini</span> = henüz settlement oluşmamış (genelde son birkaç günün siparişleri — Trendyol hakedişi teslimattan birkaç gün sonra oluşturuyor) ·
           <span class="pill pill-missing">Maliyet eksik</span> = bu SKU için ürün maliyeti tanımlı değil
         </p>
+        <label style="display:inline-flex; align-items:center; gap:6px; font-size:13px; margin-bottom:12px; cursor:pointer;">
+          <input type="checkbox" id="lines-estimated-only"> Sadece "Tahmini" satırları göster
+        </label>
         <div class="table-scroll">
           <table>
-            <thead><tr><th>Sipariş No</th><th>SKU</th><th>Ürün</th><th>Adet</th><th>Gelir</th><th>Maliyet</th><th>Kâr</th><th>Durum</th></tr></thead>
+            <thead><tr><th>Tarih</th><th>Sipariş No</th><th>SKU</th><th>Ürün</th><th>Adet</th><th>Gelir</th><th>Maliyet</th><th>Kâr</th><th>Durum</th></tr></thead>
             <tbody id="lines-body"></tbody>
           </table>
         </div>
@@ -262,6 +273,84 @@
         <span id="page-info"></span>
         <div><button id="prev-btn">← Önceki</button> <button id="next-btn">Sonraki →</button></div>
       </div>
+    </div>
+  </section>
+
+  <!-- === KÂR MARJI & UYARILAR === -->
+  <section class="tab-section" id="tab-margins">
+    <div class="panel">
+      <h2>⚠️ Uyarılar</h2>
+      <p class="panel-note">Maliyeti eksik ürünler ve düşük/negatif kâr marjlı ürünler.</p>
+      <div id="margins-warnings"></div>
+    </div>
+    <div class="panel">
+      <h2>Kâr Marjı Listesi</h2>
+      <p class="panel-note">Seçili tarih aralığında satılan tüm ürünler. Bir sütun başlığına tıklayarak sırala.</p>
+      <div id="margins-loading" class="loading">Yükleniyor…</div>
+      <div id="margins-table-wrap" style="display:none;" class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th data-sort="sku">SKU</th>
+              <th>Ürün</th>
+              <th data-sort="quantity" style="cursor:pointer;">Adet ↕</th>
+              <th data-sort="revenue" style="cursor:pointer;">Ciro ↕</th>
+              <th data-sort="profit" style="cursor:pointer;">Kâr ↕</th>
+              <th data-sort="margin" style="cursor:pointer;">Marj ↕</th>
+              <th>Maliyet</th>
+            </tr>
+          </thead>
+          <tbody id="margins-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- === ÜRÜN AYARLARI === -->
+  <section class="tab-section" id="tab-settings">
+    <div class="panel">
+      <h2>Ürün Maliyeti Ekle / Güncelle</h2>
+      <p class="panel-note">Excel yüklemeye gerek kalmadan tek bir SKU'nun maliyetini girin.</p>
+      <div id="cost-form-msg" style="display:none; margin-bottom:12px; font-size:13px;"></div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+        <div><label style="display:block; font-size:12px; color:var(--text-muted); margin-bottom:4px;">SKU *</label>
+          <input type="text" id="cf-sku" placeholder="SH-10TF-BG" style="color:var(--text-main); background:white; border:1px solid var(--border);"></div>
+        <div><label style="display:block; font-size:12px; color:var(--text-muted); margin-bottom:4px;">Ürün Adı</label>
+          <input type="text" id="cf-name" placeholder="(opsiyonel)" style="color:var(--text-main); background:white; border:1px solid var(--border);"></div>
+        <div><label style="display:block; font-size:12px; color:var(--text-muted); margin-bottom:4px;">Maliyet (KDV Dahil) *</label>
+          <input type="number" step="0.01" id="cf-cost" placeholder="2145" style="color:var(--text-main); background:white; border:1px solid var(--border); width:130px;"></div>
+        <button class="primary" id="cf-submit" style="background:var(--ty-orange); color:white;">Kaydet</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Tanımlı Ürün Maliyetleri</h2>
+      <div id="costs-loading" class="loading">Yükleniyor…</div>
+      <div id="costs-table-wrap" style="display:none;" class="table-scroll">
+        <table>
+          <thead><tr><th>SKU</th><th>Ürün Adı</th><th>Maliyet (KDV Dahil)</th><th>Güncellenme</th><th></th></tr></thead>
+          <tbody id="costs-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>🧮 Fiyatlandırma Hesaplayıcısı</h2>
+      <p class="panel-note">Maliyet ve hedef kâr marjına göre önerilen satış fiyatını hesaplar. Trendyol komisyonunu düşer; kargo/stopaj gibi diğer kesintileri içermez, kaba bir tahmindir.</p>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+        <div><label style="display:block; font-size:12px; color:var(--text-muted); margin-bottom:4px;">SKU'dan Doldur</label>
+          <select id="pc-sku-select" style="color:var(--text-main); background:white; border:1px solid var(--border); min-width:180px;">
+            <option value="">— seç —</option>
+          </select></div>
+        <div><label style="display:block; font-size:12px; color:var(--text-muted); margin-bottom:4px;">Maliyet (KDV Dahil)</label>
+          <input type="number" step="0.01" id="pc-cost" style="color:var(--text-main); background:white; border:1px solid var(--border); width:110px;"></div>
+        <div><label style="display:block; font-size:12px; color:var(--text-muted); margin-bottom:4px;">Komisyon %</label>
+          <input type="number" step="0.1" id="pc-commission" style="color:var(--text-main); background:white; border:1px solid var(--border); width:90px;"></div>
+        <div><label style="display:block; font-size:12px; color:var(--text-muted); margin-bottom:4px;">Hedef Kâr Marjı %</label>
+          <input type="number" step="0.5" id="pc-margin" value="20" style="color:var(--text-main); background:white; border:1px solid var(--border); width:90px;"></div>
+        <button class="primary" id="pc-calc" style="background:var(--ty-orange); color:white;">Hesapla</button>
+      </div>
+      <div id="pc-result" style="display:none; margin-top:16px; padding:14px 18px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px;"></div>
     </div>
   </section>
 
@@ -305,8 +394,10 @@ async function checkConfig() {
 }
 
 // ---------- Sekme yönetimi ----------
-const dirty = { sales: true, profit: true, orders: true };
+const dirty = { sales: true, profit: true, orders: true, margins: true, settings: true };
 let activeTab = 'sales';
+let marginSortBy = 'profit';
+let marginSortOrder = 'desc';
 
 function switchTab(tab) {
   activeTab = tab;
@@ -323,6 +414,8 @@ function loadTab(tab) {
   if (tab === 'sales') loadSales();
   else if (tab === 'profit') loadProfit();
   else if (tab === 'orders') loadOrders(1);
+  else if (tab === 'margins') loadMargins();
+  else if (tab === 'settings') loadSettings();
 }
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -330,14 +423,88 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 document.getElementById('range-select').addEventListener('change', () => {
-  dirty.sales = dirty.profit = dirty.orders = true;
+  dirty.sales = dirty.profit = dirty.orders = dirty.margins = true;
   loadTab(activeTab);
 });
 
 document.getElementById('sync-btn').addEventListener('click', runSync);
 
 // ---------- SATIŞ ÖZETİ ----------
-let salesChart, ordersChart, returnsChart;
+let salesChart, ordersChart, returnsChart, monthlyProfitChart;
+let monthlyProfitLoaded = false;
+
+async function loadMonthlyProfitChart() {
+  if (monthlyProfitLoaded) return;
+  try {
+    const res = await fetch('/api/monthly-profit?full_history=true');
+    const data = await res.json();
+    if (data.error) { showError(data.error); return; }
+    renderMonthlyProfitChart(data.months || []);
+    monthlyProfitLoaded = true;
+    document.getElementById('monthly-loading').style.display = 'none';
+    document.getElementById('monthlyProfitChartWrap').style.display = 'block';
+  } catch (e) {
+    showError('Aylık kâr trendi alınamadı: ' + e.message);
+  }
+}
+
+function renderMonthlyProfitChart(months) {
+  const labels = months.map(m => {
+    const [y, mo] = m.month.split('-');
+    return new Date(y, mo - 1, 1).toLocaleDateString('tr-TR', { month: 'short', year: '2-digit' });
+  });
+  const tlFmt = new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 0 });
+
+  if (monthlyProfitChart) monthlyProfitChart.destroy();
+  monthlyProfitChart = new Chart(document.getElementById('monthlyProfitChart'), {
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'bar', label: 'Ciro', data: months.map(m => m.revenue),
+          backgroundColor: '#fde4cc', borderRadius: 4, borderSkipped: false,
+          order: 3, barPercentage: 0.62, categoryPercentage: 0.7,
+        },
+        {
+          type: 'bar', label: 'Brüt Kâr', data: months.map(m => m.grossProfit),
+          backgroundColor: '#93c5fd', borderRadius: 4, borderSkipped: false,
+          order: 2, barPercentage: 0.62, categoryPercentage: 0.7,
+        },
+        {
+          type: 'line', label: 'Net Kâr', data: months.map(m => m.netProfit),
+          borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,0.12)',
+          borderWidth: 3, tension: 0.35, fill: true, order: 1,
+          pointRadius: 4, pointHoverRadius: 6, pointBackgroundColor: '#16a34a',
+          pointBorderColor: 'white', pointBorderWidth: 2,
+        },
+      ]
+    },
+    options: {
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          position: 'top', align: 'end',
+          labels: { usePointStyle: true, pointStyle: 'circle', boxWidth: 8, padding: 18, font: { size: 12.5 } },
+        },
+        tooltip: {
+          backgroundColor: '#1f2430', padding: 12, cornerRadius: 8, titleFont: { size: 13, weight: '600' },
+          bodyFont: { size: 12.5 }, bodySpacing: 6,
+          callbacks: { label: (ctx) => `${ctx.dataset.label}: ${tlFmt.format(ctx.parsed.y)}` }
+        },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 11.5 }, color: '#6b7280' } },
+        y: {
+          beginAtZero: true,
+          grid: { color: '#f0f1f3' },
+          border: { display: false },
+          ticks: { font: { size: 11.5 }, color: '#6b7280', callback: (v) => tlFmt.format(v).replace(/,00.*/, '').replace(/\s?TRY/, '') },
+        },
+      },
+    }
+  });
+}
 
 async function loadSales() {
   const configured = await checkConfig();
@@ -429,6 +596,7 @@ async function loadProfit() {
     renderDataQuality(summary.data_quality);
     renderLines(summary.lines);
     renderBestSellers(best.items || []);
+    loadMonthlyProfitChart();
 
     document.getElementById('profit-loading').style.display = 'none';
     document.getElementById('profit-content').style.display = 'block';
@@ -478,12 +646,29 @@ function renderBestSellers(items) {
   `).join('');
 }
 
+let linesCache = [];
+
 function renderLines(lines) {
-  document.getElementById('lines-body').innerHTML = lines.slice(0, 300).map(l => {
+  linesCache = lines;
+  applyLinesFilter();
+}
+
+function applyLinesFilter() {
+  const onlyEstimated = document.getElementById('lines-estimated-only').checked;
+  let rows = onlyEstimated ? linesCache.filter(l => l.estimated) : linesCache;
+  // Tahmini satırları en üstte, en yeni tarihten eskiye göster — hangi
+  // siparişlerin henüz settlement'ı gelmediğini hızlıca görmek için.
+  rows = [...rows].sort((a, b) => {
+    if (a.estimated !== b.estimated) return a.estimated ? -1 : 1;
+    return (b.orderDate || 0) - (a.orderDate || 0);
+  });
+
+  document.getElementById('lines-body').innerHTML = rows.slice(0, 300).map(l => {
     let pill = l.estimated ? '<span class="pill pill-estimated">Tahmini</span>' : '<span class="pill pill-real">Gerçek</span>';
     if (l.missingCost) pill += ' <span class="pill pill-missing">Maliyet eksik</span>';
     return `
       <tr>
+        <td>${l.orderDate ? new Date(l.orderDate).toLocaleDateString('tr-TR') : '—'}</td>
         <td>${l.orderNumber || ''}</td>
         <td>${l.sku || '–'}</td>
         <td>${l.productName || ''}</td>
@@ -495,7 +680,14 @@ function renderLines(lines) {
       </tr>
     `;
   }).join('');
+
+  if (onlyEstimated && !rows.length) {
+    document.getElementById('lines-body').innerHTML = `<tr><td colspan="9" style="text-align:center; color:var(--text-muted); padding:20px;">Şu an tahmini (settlement bekleyen) satır yok.</td></tr>`;
+  }
 }
+
+document.getElementById('lines-estimated-only').addEventListener('change', applyLinesFilter);
+
 
 // ---------- SİPARİŞLER ----------
 let currentPage = 1;
@@ -646,7 +838,8 @@ async function runSync() {
         statusEl.textContent = progress.message || 'Senkronize ediliyor…';
       } else if (progress.status === 'done') {
         statusEl.textContent = progress.message || 'Tamamlandı.';
-        dirty.sales = dirty.profit = dirty.orders = true;
+        dirty.sales = dirty.profit = dirty.orders = dirty.margins = dirty.settings = true;
+        monthlyProfitLoaded = false;
         loadTab(activeTab);
         break;
       } else if (progress.status === 'error') {
@@ -666,6 +859,255 @@ async function runSync() {
     btn.textContent = 'Verileri Senkronize Et';
   }
 }
+
+// ---------- KÂR MARJI & UYARILAR ----------
+let marginItemsCache = [];
+
+async function loadMargins() {
+  document.getElementById('margins-loading').style.display = 'block';
+  document.getElementById('margins-table-wrap').style.display = 'none';
+  hideError();
+  try {
+    const rangeParam = rangeQueryParam();
+    const res = await fetch(`/api/product-performance?${rangeParam}&sort_by=${marginSortBy}&order=${marginSortOrder}&limit=500`);
+    const data = await res.json();
+    if (data.error) { showError(data.error); document.getElementById('margins-loading').style.display = 'none'; return; }
+    marginItemsCache = data.items || [];
+    renderMarginWarnings(marginItemsCache);
+    renderMarginsTable(marginItemsCache);
+    document.getElementById('margins-loading').style.display = 'none';
+    document.getElementById('margins-table-wrap').style.display = 'block';
+  } catch (e) {
+    document.getElementById('margins-loading').style.display = 'none';
+    showError('Beklenmeyen bir hata oluştu: ' + e.message);
+  }
+}
+
+function renderMarginWarnings(items) {
+  const missingCost = items.filter(i => !i.hasCost);
+  const negative = items.filter(i => i.hasCost && i.margin !== null && i.margin < 0);
+  const lowMargin = items.filter(i => i.hasCost && i.margin !== null && i.margin >= 0 && i.margin < 0.10);
+
+  const parts = [];
+  if (missingCost.length) {
+    parts.push(`<div style="background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:12px 16px; border-radius:10px; margin-bottom:10px; font-size:13.5px;">
+      🔴 <strong>${missingCost.length} ürünün maliyeti tanımlı değil</strong> — kârı hesaba katılmıyor: ${missingCost.slice(0, 15).map(i => i.sku).join(', ')}${missingCost.length > 15 ? '…' : ''}
+    </div>`);
+  }
+  if (negative.length) {
+    parts.push(`<div style="background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:12px 16px; border-radius:10px; margin-bottom:10px; font-size:13.5px;">
+      🔴 <strong>${negative.length} ürün zararına satılıyor</strong> (negatif marj): ${negative.slice(0, 15).map(i => i.sku).join(', ')}${negative.length > 15 ? '…' : ''}
+    </div>`);
+  }
+  if (lowMargin.length) {
+    parts.push(`<div style="background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; padding:12px 16px; border-radius:10px; margin-bottom:10px; font-size:13.5px;">
+      🟠 <strong>${lowMargin.length} ürünün kâr marjı %10'un altında</strong>: ${lowMargin.slice(0, 15).map(i => i.sku).join(', ')}${lowMargin.length > 15 ? '…' : ''}
+    </div>`);
+  }
+  if (!parts.length) {
+    parts.push(`<div style="background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; padding:12px 16px; border-radius:10px; font-size:13.5px;">✅ Şu an için bir uyarı yok — tüm ürünlerin maliyeti tanımlı ve marjlar makul görünüyor.</div>`);
+  }
+  document.getElementById('margins-warnings').innerHTML = parts.join('');
+}
+
+function renderMarginsTable(items) {
+  document.getElementById('margins-tbody').innerHTML = items.map(i => `
+    <tr>
+      <td>${i.sku || '–'}</td>
+      <td>${i.productName || ''}</td>
+      <td>${fmtNum(i.quantity)}</td>
+      <td>${fmtTL(i.revenue)}</td>
+      <td style="color:${(i.profit ?? 0) >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtTL(i.profit)}</td>
+      <td style="color:${i.margin !== null && i.margin < 0.10 ? 'var(--red)' : 'inherit'}">${fmtPct(i.margin)}</td>
+      <td>${i.hasCost ? '<span class="pill pill-real">Tanımlı</span>' : '<span class="pill pill-missing">Eksik</span>'}</td>
+    </tr>
+  `).join('');
+}
+
+document.querySelectorAll('#tab-margins th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const field = th.dataset.sort;
+    if (marginSortBy === field) {
+      marginSortOrder = marginSortOrder === 'desc' ? 'asc' : 'desc';
+    } else {
+      marginSortBy = field;
+      marginSortOrder = 'desc';
+    }
+    dirty.margins = true;
+    loadMargins();
+  });
+});
+
+// ---------- ÜRÜN AYARLARI ----------
+async function loadSettings() {
+  await Promise.all([loadCostsList(), loadPricingSkuOptions()]);
+}
+
+async function loadCostsList() {
+  document.getElementById('costs-loading').style.display = 'block';
+  document.getElementById('costs-table-wrap').style.display = 'none';
+  try {
+    const res = await fetch('/api/product-costs');
+    const data = await res.json();
+    renderCostsTable(data.items || []);
+    document.getElementById('costs-loading').style.display = 'none';
+    document.getElementById('costs-table-wrap').style.display = 'block';
+  } catch (e) {
+    document.getElementById('costs-loading').style.display = 'none';
+    showError('Maliyet listesi alınamadı: ' + e.message);
+  }
+}
+
+function renderCostsTable(items) {
+  if (!items.length) {
+    document.getElementById('costs-tbody').innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--text-muted); padding:20px;">Henüz maliyet tanımlanmamış.</td></tr>`;
+    return;
+  }
+  document.getElementById('costs-tbody').innerHTML = items.map(c => `
+    <tr>
+      <td>${c.sku}</td>
+      <td>${c.product_name || '—'}</td>
+      <td>${fmtTL2(c.cost_incl_vat)}</td>
+      <td style="font-size:12px; color:var(--text-muted);">${c.updated_at || '—'}</td>
+      <td><button data-sku="${c.sku}" class="cost-delete-btn" style="background:#fee2e2; color:#991b1b; padding:4px 10px; font-size:12px;">Sil</button></td>
+    </tr>
+  `).join('');
+  document.querySelectorAll('.cost-delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => deleteCost(btn.dataset.sku));
+  });
+}
+
+async function deleteCost(sku) {
+  if (!confirm(`"${sku}" için tanımlı maliyeti silmek istediğine emin misin?`)) return;
+  try {
+    await fetch(`/api/product-cost/${encodeURIComponent(sku)}`, { method: 'DELETE' });
+    dirty.margins = true;
+    loadCostsList();
+  } catch (e) {
+    showError('Silme işlemi başarısız: ' + e.message);
+  }
+}
+
+document.getElementById('cf-submit').addEventListener('click', async () => {
+  const sku = document.getElementById('cf-sku').value.trim();
+  const name = document.getElementById('cf-name').value.trim();
+  const cost = document.getElementById('cf-cost').value;
+  const msgEl = document.getElementById('cost-form-msg');
+
+  if (!sku || !cost) {
+    msgEl.style.display = 'block';
+    msgEl.style.color = 'var(--red)';
+    msgEl.textContent = 'SKU ve maliyet alanları zorunlu.';
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/product-cost', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sku, product_name: name || undefined, cost_incl_vat: parseFloat(cost) }),
+    });
+    const data = await res.json();
+    msgEl.style.display = 'block';
+    if (data.error) {
+      msgEl.style.color = 'var(--red)';
+      msgEl.textContent = data.error;
+    } else {
+      msgEl.style.color = 'var(--green)';
+      msgEl.textContent = `✓ "${sku}" için maliyet kaydedildi.`;
+      document.getElementById('cf-sku').value = '';
+      document.getElementById('cf-name').value = '';
+      document.getElementById('cf-cost').value = '';
+      dirty.margins = true;
+      loadCostsList();
+      loadPricingSkuOptions();
+    }
+  } catch (e) {
+    msgEl.style.display = 'block';
+    msgEl.style.color = 'var(--red)';
+    msgEl.textContent = 'Kaydetme hatası: ' + e.message;
+  }
+});
+
+// ---------- FİYATLANDIRMA HESAPLAYICISI ----------
+let pricingItemsCache = [];
+
+async function loadPricingSkuOptions() {
+  try {
+    const res = await fetch('/api/product-performance?full_history=true&limit=1000');
+    const data = await res.json();
+    pricingItemsCache = data.items || [];
+    const select = document.getElementById('pc-sku-select');
+    select.innerHTML = '<option value="">— seç —</option>' + pricingItemsCache
+      .map(i => `<option value="${i.sku}">${i.sku} — ${(i.productName || '').slice(0, 40)}</option>`)
+      .join('');
+  } catch (e) {
+    // sessiz geç — hesaplayıcı manuel girişle yine çalışır
+  }
+}
+
+document.getElementById('pc-sku-select').addEventListener('change', async (e) => {
+  const sku = e.target.value;
+  if (!sku) return;
+  const item = pricingItemsCache.find(i => i.sku === sku);
+  if (item && item.avgCommissionRate !== null) {
+    document.getElementById('pc-commission').value = item.avgCommissionRate;
+  }
+  try {
+    const res = await fetch('/api/product-costs');
+    const data = await res.json();
+    const costRow = (data.items || []).find(c => c.sku === sku);
+    if (costRow) document.getElementById('pc-cost').value = costRow.cost_incl_vat;
+  } catch (e) { /* sessiz geç */ }
+});
+
+document.getElementById('pc-calc').addEventListener('click', () => {
+  const cost = parseFloat(document.getElementById('pc-cost').value);
+  const commission = parseFloat(document.getElementById('pc-commission').value) || 0;
+  const targetMargin = parseFloat(document.getElementById('pc-margin').value) || 0;
+  const resultEl = document.getElementById('pc-result');
+
+  if (!cost || cost <= 0) {
+    resultEl.style.display = 'block';
+    resultEl.style.background = '#fef2f2';
+    resultEl.style.borderColor = '#fecaca';
+    resultEl.innerHTML = '<span style="color:#991b1b;">Geçerli bir maliyet girin.</span>';
+    return;
+  }
+
+  // price * (1 - komisyon/100) - cost = price * hedefMarj/100
+  // price * (1 - komisyon/100 - hedefMarj/100) = cost
+  const denom = 1 - (commission / 100) - (targetMargin / 100);
+  resultEl.style.display = 'block';
+
+  if (denom <= 0) {
+    resultEl.style.background = '#fef2f2';
+    resultEl.style.borderColor = '#fecaca';
+    resultEl.innerHTML = '<span style="color:#991b1b;">Komisyon + hedef marj toplamı %100\'ü geçemez — bu kombinasyonla hiçbir fiyat hedefe ulaşamaz. Hedef marjı veya komisyonu düşürün.</span>';
+    return;
+  }
+
+  const suggestedPrice = cost / denom;
+  const commissionAmount = suggestedPrice * (commission / 100);
+  const netAfterCommission = suggestedPrice - commissionAmount;
+  const profit = netAfterCommission - cost;
+
+  resultEl.style.background = '#f0fdf4';
+  resultEl.style.borderColor = '#bbf7d0';
+  resultEl.innerHTML = `
+    <div style="font-size:13px; color:var(--text-muted); margin-bottom:6px;">Önerilen Satış Fiyatı (KDV Dahil)</div>
+    <div style="font-size:26px; font-weight:700; color:var(--green); margin-bottom:12px;">${fmtTL2(suggestedPrice)}</div>
+    <div style="font-size:13px; color:var(--text-muted); line-height:1.7;">
+      Tahmini komisyon (%${commission}): ${fmtTL2(commissionAmount)}<br>
+      Komisyon sonrası net: ${fmtTL2(netAfterCommission)}<br>
+      Ürün maliyeti: ${fmtTL2(cost)}<br>
+      Tahmini kâr: <strong style="color:var(--green);">${fmtTL2(profit)}</strong> (satış fiyatının %${targetMargin}'i)
+    </div>
+    <div style="font-size:11.5px; color:var(--text-muted); margin-top:10px;">
+      ⚠️ Bu hesap kargo, stopaj, erken ödeme kesintisi gibi diğer maliyetleri içermez — kaba bir tahmindir.
+    </div>
+  `;
+});
 
 // ---------- Başlangıç ----------
 // URL'de ?tab=profit veya ?tab=orders varsa o sekmeyle aç (eski /dashboard, /orders linkleri için).

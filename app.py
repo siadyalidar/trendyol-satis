@@ -779,6 +779,16 @@ def api_monthly_profit():
     except Exception as e:
         return jsonify({"error": f"Hesaplama hatası: {e}"}), 500
 
+    # DATA_START_DATE .env'de ayarlanmadıysa varsayılan olarak 3 yıl öncesine
+    # kadar gidiyor, ama mağaza gerçekte çok sonra açılmış olabilir — grafikte
+    # onlarca boş (hepsi 0) ay göstermemek için baştaki hareketsiz ayları kırpıyoruz.
+    first_active = next(
+        (i for i, m in enumerate(months) if (m.get("revenue") or 0) != 0
+         or (m.get("grossProfit") or 0) != 0 or (m.get("netProfit") or 0) != 0),
+        0,
+    )
+    months = months[first_active:]
+
     return jsonify({"months": months})
 
 
