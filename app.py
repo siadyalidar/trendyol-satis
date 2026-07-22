@@ -690,6 +690,73 @@ def api_orders():
     })
 
 
+@app.route("/api/product-costs")
+def list_product_costs():
+    """Ürün Ayarları sayfası için: tanımlı tüm ürün maliyetlerini döner."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT sku, product_name, cost_incl_vat, cost_excl_vat,
+                      sale_price_incl_vat, sale_price_excl_vat, updated_at
+               FROM product_costs ORDER BY updated_at DESC"""
+        ).fetchall()
+    return jsonify({"items": [dict(r) for r in rows]})
+
+
+@app.route("/api/product-cost/<path:sku>", methods=["DELETE"])
+def delete_product_cost(sku):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM product_costs WHERE sku = ?", (sku,))
+    return jsonify({"ok": True, "sku": sku})
+
+
+@app.route("/api/product-performance")
+def api_product_performance():
+    """Kâr Marjı Listesi, Uyarı Sayfası ve Fiyatlandırma hesaplayıcısının ortak
+    veri kaynağı: seçilen tarih aralığında satılan HER SKU için ciro, kâr, marj
+    — artı maliyeti tanımlı mı (hasCost) ve order_lines'tan ortalama komisyon
+    oranı / ortalama satış fiyatı (fiyatlandırma hesaplayıcısı için).
+    Parametreler: days=N | full_history=true, sort_by=margin|profit|revenue|quantity,
+                  order=asc|desc, limit=500
+    """
+    start_dt, end_dt = _resolve_sync_range(request.args)
+    sort_by = request.args.get("sort_by", "profit")
+    order = request.args.get("order", "desc")
+    limit = request.args.get("limit", default=500, type=int)
+    limit = max(1, min(limit or 500, 2000))
+
+    try:
+        items = compute_best_sellers(start_dt=start_dt, end_dt=end_dt, limit=100000)
+    except Exception as e:
+        return jsonify({"error": f"Hesaplama hatası: {e}"}), 500
+
+    with get_connection() as conn:
+        cost_skus = {r["sku"] for r in conn.execute("SELECT sku FROM product_costs").fetchall()}
+        comm_rows = conn.execute(
+            """SELECT merchant_sku AS sku, AVG(commission_rate) AS avg_commission,
+                      AVG(line_unit_price) AS avg_price
+               FROM order_lines WHERE merchant_sku IS NOT NULL GROUP BY merchant_sku"""
+        ).fetchall()
+    comm_map = {r["sku"]: r for r in comm_rows}
+
+    for it in items:
+        it["hasCost"] = it["sku"] in cost_skus
+        extra = comm_map.get(it["sku"])
+        it["avgCommissionRate"] = round(extra["avg_commission"], 2) if extra and extra["avg_commission"] is not None else None
+        it["avgUnitPrice"] = round(extra["avg_price"], 2) if extra and extra["avg_price"] is not None else None
+
+    reverse = order != "asc"
+    NEG_INF, POS_INF = -1e18, 1e18
+    key_fns = {
+        "margin": lambda x: x["margin"] if x["margin"] is not None else (NEG_INF if reverse else POS_INF),
+        "profit": lambda x: x["profit"] if x["profit"] is not None else (NEG_INF if reverse else POS_INF),
+        "revenue": lambda x: x["revenue"] or 0,
+        "quantity": lambda x: x["quantity"] or 0,
+    }
+    items.sort(key=key_fns.get(sort_by, key_fns["profit"]), reverse=reverse)
+
+    return jsonify({"items": items[:limit], "total": len(items)})
+
+
 @app.route("/orders")
 def orders_page():
     # Eski bookmark/link uyumluluğu: artık "Siparişler" tek sayfadaki bir sekme.
