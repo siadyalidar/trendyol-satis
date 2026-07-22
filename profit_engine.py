@@ -330,6 +330,32 @@ def compute_profit_summary(days=None, start_dt=None, end_dt=None):
     }
 
 
+def monthly_profit(start_dt, end_dt):
+    """start_dt - end_dt aralığını takvim aylarına böler, her ay için
+    compute_profit_summary'yi çalıştırıp (ciro, brüt kâr, net kâr) döner.
+    Aylık kâr trendi grafiği için kullanılır.
+    """
+    months = []
+    cursor = datetime(start_dt.year, start_dt.month, 1)
+    while cursor <= end_dt:
+        if cursor.month == 12:
+            next_month = datetime(cursor.year + 1, 1, 1)
+        else:
+            next_month = datetime(cursor.year, cursor.month + 1, 1)
+        month_start = max(cursor, start_dt)
+        month_end = min(next_month, end_dt + timedelta(seconds=1))
+        summary = compute_profit_summary(start_dt=month_start, end_dt=month_end)
+        t = summary["totals"]
+        months.append({
+            "month": cursor.strftime("%Y-%m"),
+            "revenue": t["revenue"],
+            "grossProfit": t["gross_profit"],
+            "netProfit": t["net_profit"],
+        })
+        cursor = next_month
+    return months
+
+
 def best_sellers(days=None, start_dt=None, end_dt=None, limit=10):
     summary = compute_profit_summary(days=days, start_dt=start_dt, end_dt=end_dt)
 

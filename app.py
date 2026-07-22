@@ -38,6 +38,7 @@ from database import (
 )
 from profit_engine import best_sellers as compute_best_sellers
 from profit_engine import compute_profit_summary
+from profit_engine import monthly_profit as compute_monthly_profit
 from trendyol_finance import sync_finance_data
 
 load_dotenv()
@@ -755,6 +756,30 @@ def api_product_performance():
     items.sort(key=key_fns.get(sort_by, key_fns["profit"]), reverse=reverse)
 
     return jsonify({"items": items[:limit], "total": len(items)})
+
+
+@app.route("/api/monthly-profit")
+def api_monthly_profit():
+    """Aylık Net Kâr Trendi grafiği için: DATA_START_DATE'ten (veya verilen
+    start_date'ten) bugüne kadar her ay için ciro/brüt kâr/net kâr döner.
+    Parametreler: full_history=true (varsayılan) | start_date=YYYY-MM-DD
+    """
+    args = request.args
+    end_dt = datetime.now()
+    if args.get("start_date"):
+        try:
+            start_dt = datetime.strptime(args["start_date"], "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "start_date formatı YYYY-MM-DD olmalı."}), 400
+    else:
+        start_dt = DATA_START_DATE
+
+    try:
+        months = compute_monthly_profit(start_dt, end_dt)
+    except Exception as e:
+        return jsonify({"error": f"Hesaplama hatası: {e}"}), 500
+
+    return jsonify({"months": months})
 
 
 @app.route("/orders")
